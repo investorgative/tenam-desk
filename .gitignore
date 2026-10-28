@@ -1,0 +1,7 @@
+venv/
+data/
+__pycache__/
+*.pyc
+static/lightweight-charts.js
+config.local.json
+config.json

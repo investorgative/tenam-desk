@@ -1,0 +1,262 @@
+{
+  "display_timezone": "Europe/Berlin",
+  "session_timezone": "America/New_York",
+  "markets": {
+    "btc": {
+      "enabled": true,
+      "label": "BTCUSDT",
+      "title": "Bitcoin perpetual",
+      "venue": "BYBIT",
+      "feed": {
+        "type": "bybit",
+        "symbol": "BTCUSDT",
+        "category": "linear"
+      },
+      "pair": {
+        "type": "bybit",
+        "symbol": "ETHUSDT",
+        "category": "linear",
+        "label": "ETHUSDT"
+      },
+      "backtest_feed": null,
+      "backtest_pair": null,
+      "day_start_hour": 0,
+      "closed_weekends": false,
+      "trade_weekdays_only": true,
+      "account": {
+        "start_balance": 100.0,
+        "risk_pct": 2.0,
+        "compound": true,
+        "max_leverage": 50
+      },
+      "fee_profile": "bybit",
+      "fee_profiles": {
+        "bybit": {
+          "label": "Bybit non-VIP linear",
+          "fees": {
+            "model": "bybit",
+            "maker": 0.0002,
+            "taker": 0.00055,
+            "include_funding": true,
+            "slippage_pct": 0.01,
+            "fee_in_risk": true
+          },
+          "instrument": {
+            "qty_step": 0.001,
+            "min_qty": 0.001,
+            "min_notional": 5.0,
+            "tick_size": 0.1,
+            "point_value": 1.0,
+            "unit": "BTC"
+          }
+        }
+      },
+      "rules": {
+        "manip_min_pct": 0.06,
+        "wick_tol_pct": 0.03,
+        "min_sl_pct": 0.15,
+        "max_sl_pct": 1.2,
+        "rb_min_sl_pct": 0.08,
+        "fixed_sl_pct": 0.25,
+        "sl_buffer_pct": 0.01,
+        "expansion_pct": 5.0,
+        "min_corr": 0.5,
+        "zone_pct": 0.03,
+        "max_target_pct": 3.0
+      }
+    },
+    "nq": {
+      "enabled": true,
+      "label": "NQ1!",
+      "title": "Nasdaq-100 E-mini",
+      "venue": "IBKR",
+      "feed": {
+        "type": "yahoo",
+        "symbol": "NQ=F"
+      },
+      "pair": {
+        "type": "yahoo",
+        "symbol": "ES=F",
+        "label": "ES1!"
+      },
+      "backtest_feed": {
+        "type": "dukascopy",
+        "symbol": "USATECHIDXUSD",
+        "price_range": [
+          3000,
+          90000
+        ]
+      },
+      "backtest_pair": {
+        "type": "dukascopy",
+        "symbol": "USA500IDXUSD",
+        "price_range": [
+          500,
+          20000
+        ]
+      },
+      "day_start_hour": 18,
+      "closed_weekends": true,
+      "trade_weekdays_only": true,
+      "account": {
+        "start_balance": 5000.0,
+        "risk_pct": 2.0,
+        "compound": true,
+        "max_leverage": 30
+      },
+      "fee_profile": "ibkr_mnq",
+      "fee_profiles": {
+        "ibkr_mnq": {
+          "label": "IBKR Micro NQ (MNQ) futures",
+          "fees": {
+            "model": "futures",
+            "commission_per_contract_side": 0.62,
+            "slippage_ticks": 1,
+            "fee_in_risk": true
+          },
+          "instrument": {
+            "qty_step": 1,
+            "min_qty": 1,
+            "min_notional": 0,
+            "tick_size": 0.25,
+            "point_value": 2.0,
+            "unit": "MNQ"
+          }
+        },
+        "ibkr_nq": {
+          "label": "IBKR E-mini NQ futures",
+          "fees": {
+            "model": "futures",
+            "commission_per_contract_side": 2.25,
+            "slippage_ticks": 1,
+            "fee_in_risk": true
+          },
+          "instrument": {
+            "qty_step": 1,
+            "min_qty": 1,
+            "min_notional": 0,
+            "tick_size": 0.25,
+            "point_value": 20.0,
+            "unit": "NQ"
+          }
+        },
+        "ibkr_cfd": {
+          "label": "IBKR US Tech 100 index CFD",
+          "fees": {
+            "model": "cfd",
+            "spread_pts": 1.0,
+            "commission_pct_side": 0.005,
+            "commission_min": 1.0,
+            "commission_per_lot_side": 0.0,
+            "swap_long_pct_year": -6.5,
+            "swap_short_pct_year": -1.5,
+            "slippage_pts": 0.5,
+            "fee_in_risk": true
+          },
+          "instrument": {
+            "qty_step": 0.1,
+            "min_qty": 0.1,
+            "min_notional": 0,
+            "tick_size": 0.25,
+            "point_value": 1.0,
+            "unit": "CFD"
+          }
+        }
+      },
+      "rules": {
+        "manip_min_pct": 0.03,
+        "wick_tol_pct": 0.012,
+        "min_sl_pct": 0.08,
+        "max_sl_pct": 0.6,
+        "rb_min_sl_pct": 0.03,
+        "fixed_sl_pct": 0.08,
+        "sl_buffer_pct": 0.004,
+        "expansion_pct": 2.4,
+        "min_corr": 0.6,
+        "zone_pct": 0.015,
+        "max_target_pct": 1.5
+      }
+    }
+  },
+  "strategy": {
+    "key_open": "10:00",
+    "ny_open": "09:30",
+    "entry_window_end": "11:30",
+    "flatten": "15:50",
+    "asia": [
+      "20:00",
+      "00:00"
+    ],
+    "london": [
+      "02:00",
+      "05:00"
+    ],
+    "news_time": "08:30",
+    "confirm_closes": 2,
+    "confirm_5m": true,
+    "require_clean": true,
+    "entry_mode": "limit",
+    "rb_tf": 1,
+    "rb_entry": "body",
+    "rb_wick_frac": 0.35,
+    "rb_valid_bars": 10,
+    "fill_through_ticks": 0,
+    "sl_mode": "rr_target",
+    "rr_target": 5.0,
+    "rr_min": 3.0,
+    "fib_level": 0.5,
+    "tp_mode": "dol",
+    "tp_rr": 5.0,
+    "swing_left": 2,
+    "swing_right": 2,
+    "be_trigger_r": 2.0,
+    "be_offset_r": 0.05,
+    "max_trades": 2,
+    "stop_after_win": true,
+    "second_risk_mult": 0.5,
+    "both_hit": "SL",
+    "filters": {
+      "fomc": true,
+      "expansion": true,
+      "expansion_rel": 2.5,
+      "correlation": true,
+      "no_news_monday": true,
+      "news_day": false,
+      "day_before_nfp": false
+    },
+    "bias": {
+      "judas": false,
+      "midnight": false,
+      "pair_confirm": false,
+      "require_sweep": false
+    }
+  },
+  "engine": {
+    "poll_seconds": 10,
+    "yahoo_poll_seconds": 30,
+    "pair_wait_s": 120,
+    "history_days": 30,
+    "chart_days": 4,
+    "max_catchup_days": 7
+  },
+  "backtest": {
+    "default_days": 365,
+    "max_days": 1095,
+    "lab_days": 180
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 8757,
+    "password": ""
+  },
+  "discord": {
+    "errors": "",
+    "btc": "",
+    "nq": "",
+    "notify_start": true,
+    "notify_setups": true,
+    "notify_orders": true,
+    "notify_trades": true,
+    "notify_daily": true
+  }
+}

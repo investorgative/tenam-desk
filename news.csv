@@ -1,0 +1,3 @@
+# Extra / corrected red-folder dates (08:30 CPI, PPI, NFP; 14:00 FOMC). One per line: YYYY-MM-DD,EVENT
+# Prefix the event with "-" to remove a built-in date, e.g.  2026-11-10,-CPI
+# The built-in table covers BLS + Fed schedules 2024-2027; the trader also pulls the ForexFactory week calendar.
