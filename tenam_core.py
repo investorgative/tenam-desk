@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import requests
 
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
@@ -593,19 +593,23 @@ class DukascopyFeed:
     def day(self, d: date):
         url = f"{self.base}/{self.sym}/{d.year:04d}/{d.month - 1:02d}/{d.day:02d}/BID_candles_min_1.bi5"
         err = None
-        for attempt in range(4):
+        for attempt in range(3):
             try:
                 t0 = time.time()
-                r = self.s.get(url, timeout=30)
+                r = self.s.get(url, timeout=(10, 40))
                 self.last_latency_ms = int((time.time() - t0) * 1000)
                 if r.status_code == 404:
                     return []
+                if r.status_code in (429, 503):
+                    raise RuntimeError(f"HTTP {r.status_code} (throttled)")
                 r.raise_for_status()
                 base = int(datetime(d.year, d.month, d.day, tzinfo=timezone.utc).timestamp() * 1000)
                 return self.decode(r.content, base)
+            except ValueError:
+                raise
             except Exception as e:
                 err = e
-                time.sleep(1.5 * (attempt + 1))
+                time.sleep(2.0 * (attempt + 1))
         raise RuntimeError(f"Dukascopy request failed {url}: {err}")
 
     def decode(self, raw, base_ms):
@@ -730,14 +734,34 @@ class CandleStore:
             if d.weekday() != 5 and d < today and (k not in have or (have[k] == 0 and (today - d).days <= 3)):
                 days.append(d)
             d += timedelta(days=1)
+        # Dukascopy throttles fast downloaders (connections time out for a few minutes).
+        # -> polite pacing + patient back-off; every finished day is cached, so a re-run resumes.
+        waits = (20, 45, 90, 180, 300, 300)
         for k, d in enumerate(days):
-            rows = self.feed.day(d)
+            for w in range(len(waits) + 1):
+                try:
+                    rows = self.feed.day(d)
+                    break
+                except ValueError:
+                    raise
+                except Exception as e:
+                    if w == len(waits):
+                        done = sum(1 for _ in self.con.execute("SELECT 1 FROM duka_days WHERE key=?", (self.feed.key,)))
+                        raise RuntimeError(
+                            f"Dukascopy stopped answering for ~15 min ({e.__class__.__name__}). "
+                            f"{done} days are cached - press RUN again later, the download resumes where it stopped.")
+                    logging.getLogger("data").warning(
+                        f"Dukascopy {self.feed.sym} {d}: {e} - waiting {waits[w]}s (throttle back-off)")
+                    for left in range(waits[w], 0, -5):
+                        if progress:
+                            progress(k / len(days), f"Dukascopy throttling · retry in {left}s · {k}/{len(days)} days")
+                        time.sleep(5)
             self.insert(rows)
             self.con.execute("INSERT OR REPLACE INTO duka_days VALUES(?,?,?)", (self.feed.key, d.isoformat(), len(rows)))
             self.con.commit()
             if progress:
-                progress((k + 1) / len(days))
-            time.sleep(0.05)
+                progress((k + 1) / len(days), f"{k + 1}/{len(days)} days")
+            time.sleep(0.35)
 
 
 class FundingStore:
@@ -781,9 +805,9 @@ def load_data(con, M, start, end, src="paper", progress=None, download=True, fee
     sm = CandleStore(con, main)
     sp = CandleStore(con, pair) if pair else None
     if download:
-        sm.ensure(start, end, progress=(lambda x: progress("downloading " + fm["symbol"], x * 0.55)) if progress else None)
+        sm.ensure(start, end, progress=(lambda x, note=None: progress("downloading " + fm["symbol"] + (f" · {note}" if note else ""), x * 0.55)) if progress else None)
         if sp:
-            sp.ensure(start, end, progress=(lambda x: progress("downloading " + fp["symbol"], 0.55 + x * 0.3)) if progress else None)
+            sp.ensure(start, end, progress=(lambda x, note=None: progress("downloading " + fp["symbol"] + (f" · {note}" if note else ""), 0.55 + x * 0.3)) if progress else None)
     funding = {}
     if M["fees"].get("model") == "bybit" and M["fees"].get("include_funding") and isinstance(main, BybitFeed):
         fs = FundingStore(con, main)
