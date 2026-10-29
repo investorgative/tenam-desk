@@ -119,5 +119,5 @@ byte-identical trades to a single full backtest.
 * *Dashboard error / no data*: `tmux attach -t TEN` — the first start downloads 30 days of 1m data per feed.
 * *Dukascopy decode error*: the format is auto-detected; if it still fails run the NQ backtest with source
   "Yahoo NQ=F" and send me the error from the WEB log.
-* *Yahoo 429*: raise `engine.yahoo_poll_seconds` in `config.json` (default 30 s).
+* *Yahoo 429*: handled automatically since v1.0.1 (Chrome TLS fingerprint via curl_cffi, cookie/crumb, shared cooldown 30 s → 15 min). BTC keeps running meanwhile; Discord only alerts if the NQ feed is down > 20 min. If it persists, raise `engine.yahoo_poll_seconds` (default 30) in `config.json`.
 * Live execution (IBKR TWS/Gateway, Bybit) is staged in the header (LIVE 🔒) but **not implemented**.

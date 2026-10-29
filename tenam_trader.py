@@ -44,6 +44,37 @@ class MarketRunner:
         self.price = None
         self.forming = None
         self.state = core.kv_get(con, f"paper_state_{mkt}")
+        self.ready = False
+        self.fail_since = None
+        self.fail_n = 0
+        self.alerted = False
+
+    # ------------------------------------------------------------------ error handling
+    def on_error(self, e, what):
+        """Retries quietly; Discord (ERROR) only once if the feed stays down for > 20 min."""
+        now = time.time()
+        self.errors += 1
+        self.fail_n += 1
+        if self.fail_since is None:
+            self.fail_since = now
+        rl = isinstance(e, core.RateLimited)
+        wait = max(core.YahooFeed.cooldown_left() if rl else 0, min(300, 15 * 2 ** min(self.fail_n - 1, 4)))
+        self.next_poll = now + wait
+        down = (now - self.fail_since) / 60
+        msg = f"[{self.mkt}] {what} failed ({self.fail_n}x, down {down:.0f} min): {e} - retry in {wait:.0f}s"
+        if down >= 20 and not self.alerted:
+            self.alerted = True
+            self.log.error(msg + " - data feed down for more than 20 minutes", exc_info=not rl)
+        elif rl:
+            self.log.warning(msg)
+        else:
+            self.log.warning(msg, exc_info=True)
+
+    def on_ok(self):
+        if self.alerted:
+            self.log.info(f"[{self.mkt}] data feed recovered after {(time.time() - self.fail_since) / 60:.0f} min")
+            core.discord_send(self.cfg, "errors", f"✅ **TEN·AM {self.M['label']}** data feed recovered")
+        self.fail_since, self.fail_n, self.alerted = None, 0, False
 
     # ------------------------------------------------------------------ setup
     def bootstrap(self):
@@ -53,7 +84,10 @@ class MarketRunner:
                       f"({E['history_days']}d of 1m history)")
         self.sm.ensure(now - E["history_days"] * core.DAY, now)
         if self.sp:
-            self.sp.ensure(now - E["history_days"] * core.DAY, now)
+            try:
+                self.sp.ensure(now - E["history_days"] * core.DAY, now)
+            except Exception as e:
+                self.log.warning(f"[{self.mkt}] pair history {self.fp['symbol']} incomplete ({e}) - will fill later")
         self._funding(force=True)
         if not self.state:
             eng = core.Engine(self.M)
@@ -86,12 +120,21 @@ class MarketRunner:
         rows, price, forming = self.main.latest()
         self.sm.insert(rows)
         if self.sp:
-            self.sp.insert(self.pair.latest()[0])
+            try:
+                self.sp.insert(self.pair.latest()[0])
+            except Exception as e:      # pair is only for correlation/SMT - engine waits max pair_wait_s
+                self.log.warning(f"[{self.mkt}] pair feed {self.fp['symbol']}: {e}")
         last = self.sm.last_ts() or 0
         if last and now - last > 15 * core.MIN and rows and rows[0][0] - last > core.MIN:
             self.sm.ensure(last, now)            # gap (network / restart)
-            if self.sp:
-                self.sp.ensure(last, now)
+        if self.sp and time.time() - getattr(self, "_pair_fill", 0) > 600:
+            self._pair_fill = time.time()        # fill pair history gaps (e.g. after a Yahoo rate limit)
+            try:
+                pl = self.sp.last_ts() or 0
+                if now - pl > 15 * core.MIN:
+                    self.sp.ensure(now - self.cfg["engine"]["history_days"] * core.DAY, now)
+            except Exception as e:
+                self.log.warning(f"[{self.mkt}] pair history fill: {e}")
         self._funding()
         self.price, self.forming = price, forming
         self.process()
@@ -191,26 +234,27 @@ class Trader:
             self.log.warning(f"ForexFactory calendar unavailable ({e}) - using built-in calendar")
 
     def run(self):
-        for r in self.runners:
-            for attempt in range(5):
-                try:
-                    r.bootstrap()
-                    break
-                except Exception:
-                    self.log.exception(f"[{r.mkt}] bootstrap failed (attempt {attempt + 1}/5)")
-                    time.sleep(20)
+        self.log.info(f"TEN·AM trader v{core.VERSION} - markets: {', '.join(r.mkt for r in self.runners)}")
         while self.running:
             self.news()
             for r in self.runners:
-                if time.time() < r.next_poll:
+                if not self.running or time.time() < r.next_poll:
+                    continue
+                if not r.ready:
+                    try:
+                        r.bootstrap()
+                        r.ready = True
+                        r.on_ok()
+                        r.next_poll = time.time() + r.poll_s
+                    except Exception as e:
+                        r.on_error(e, "bootstrap")
                     continue
                 r.next_poll = time.time() + r.poll_s
                 try:
                     r.poll()
-                except Exception:
-                    r.errors += 1
-                    self.log.exception(f"[{r.mkt}] poll failed")
-                    r.next_poll = time.time() + max(15, r.poll_s)
+                    r.on_ok()
+                except Exception as e:
+                    r.on_error(e, "poll")
             time.sleep(1)
         self.log.info("Paper trader stopped.")
 

@@ -35,7 +35,7 @@ from zoneinfo import ZoneInfo
 import numpy as np
 import requests
 
-VERSION = "1.0.0"
+VERSION = "1.0.1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LOG_DIR = os.path.join(DATA_DIR, "logs")
@@ -435,30 +435,104 @@ class BybitFeed:
         return res
 
 
+class RateLimited(RuntimeError):
+    """Data source refuses requests for a while (HTTP 429) - not a bug, just wait."""
+
+
+try:  # Yahoo blocks python-requests' TLS fingerprint -> impersonate a real Chrome if possible
+    from curl_cffi import requests as _creq
+except Exception:  # pragma: no cover
+    _creq = None
+
+
 class YahooFeed:
-    """Yahoo Finance v8 chart API, 1m bars (CME futures are ~10 min delayed, ~30 days of 1m history)."""
+    """Yahoo Finance v8 chart API, 1m bars (CME futures are ~10 min delayed, ~30 days of 1m history).
+
+    * uses curl_cffi (Chrome TLS fingerprint) + Yahoo cookie/crumb like yfinance does
+    * on HTTP 429 a cooldown is shared by ALL Yahoo feeds (NQ=F and ES=F) and RateLimited is raised
+      immediately instead of hammering the API (the caller just retries later)
+    """
     hosts = ("https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com")
+    _cool_until = 0.0
+    _cool_n = 0
+    _gate = threading.Lock()
+    _last_req = 0.0
 
     def __init__(self, f):
         self.f, self.sym, self.key = f, f["symbol"], feed_key(f)
-        self.s = requests.Session()
-        self.s.headers.update({"User-Agent": UA, "Accept": "application/json"})
         self.last_latency_ms = None
         self.last_meta = {}
+        self._new_session()
 
+    # ------------------------------------------------------------------ session / cookies
+    def _new_session(self):
+        if _creq is not None:
+            self.s = _creq.Session(impersonate="chrome")
+        else:
+            self.s = requests.Session()
+            self.s.headers.update({"User-Agent": UA, "Accept": "application/json,text/plain,*/*",
+                                   "Accept-Language": "en-US,en;q=0.9"})
+        self.crumb, self.primed = None, False
+
+    def _prime(self):
+        self.primed = True
+        try:
+            self.s.get("https://fc.yahoo.com", timeout=10, allow_redirects=True)   # sets the A3 cookie (404 is fine)
+        except Exception:
+            pass
+        try:
+            r = self.s.get("https://query2.finance.yahoo.com/v1/test/getcrumb", timeout=10)
+            txt = (r.text or "").strip()
+            if r.status_code == 200 and txt and "<" not in txt and len(txt) < 40:
+                self.crumb = txt
+        except Exception:
+            pass
+
+    @classmethod
+    def cooldown_left(cls):
+        return max(0.0, cls._cool_until - time.time())
+
+    @classmethod
+    def _rate_limited(cls):
+        cls._cool_n = min(cls._cool_n + 1, 6)
+        cls._cool_until = time.time() + min(900, 30 * 2 ** (cls._cool_n - 1))   # 30s,60s,...,15min
+
+    def _throttle(self):
+        with YahooFeed._gate:                      # max ~1 request / 1.2 s across all Yahoo feeds
+            wait = 1.2 - (time.time() - YahooFeed._last_req)
+            if wait > 0:
+                time.sleep(wait)
+            YahooFeed._last_req = time.time()
+
+    # ------------------------------------------------------------------ requests
     def chart(self, p1_ms, p2_ms):
+        if self.cooldown_left() > 0:
+            raise RateLimited(f"Yahoo cooldown active ({self.cooldown_left():.0f}s left)")
+        if not self.primed:
+            self._prime()
         err = None
-        for attempt in range(4):
+        for attempt in range(3):
             host = self.hosts[attempt % 2]
+            params = {"period1": int(p1_ms // 1000), "period2": int(p2_ms // 1000),
+                      "interval": "1m", "includePrePost": "true"}
+            if self.crumb:
+                params["crumb"] = self.crumb
             try:
+                self._throttle()
                 t0 = time.time()
-                r = self.s.get(f"{host}/v8/finance/chart/{self.sym}",
-                               params={"period1": int(p1_ms // 1000), "period2": int(p2_ms // 1000),
-                                       "interval": "1m", "includePrePost": "true"}, timeout=20)
+                r = self.s.get(f"{host}/v8/finance/chart/{self.sym}", params=params, timeout=20)
                 self.last_latency_ms = int((time.time() - t0) * 1000)
                 if r.status_code == 429:
-                    raise RuntimeError("Yahoo rate limit (429)")
+                    self._rate_limited()
+                    self._new_session()            # fresh cookies for the next try
+                    raise RateLimited(f"Yahoo rate limit (429) on {self.sym} - pausing Yahoo for "
+                                      f"{self.cooldown_left():.0f}s")
+                if r.status_code in (401, 403):
+                    self._new_session()
+                    self._prime()
+                    raise RuntimeError(f"Yahoo {r.status_code} (cookie/crumb refreshed)")
                 r.raise_for_status()
+                YahooFeed._cool_n = 0
                 res = r.json()["chart"]["result"]
                 if not res:
                     return []
@@ -472,24 +546,30 @@ class YahooFeed:
                     if None in (o, h, l, c):
                         continue
                     out.append((int(t) * 1000 // MIN * MIN, float(o), float(h), float(l), float(c),
-                                float(q["volume"][k] or 0)))
+                                float((q.get("volume") or [0] * len(ts))[k] or 0)))
                 return out
+            except RateLimited:
+                raise
             except Exception as e:
                 err = e
                 time.sleep(2.0 * (attempt + 1))
         raise RuntimeError(f"Yahoo request failed {self.sym}: {err}")
 
-    def range(self, start, end, progress=None):
+    def range(self, start, end, progress=None, sink=None):
+        """Downloads in 6-day chunks; with `sink` every chunk is stored immediately (resumable)."""
         start = max(int(start), now_ms() - 29 * DAY)
         res, cur, total = {}, start, max(1, end - start)
         while cur < end:
             nxt = min(end, cur + 6 * DAY)
-            for r in self.chart(cur, nxt):
-                res[r[0]] = r
+            rows = [r for r in self.chart(cur, nxt) if cur <= r[0] <= nxt]
+            if sink:
+                sink(rows)
+            else:
+                for r in rows:
+                    res[r[0]] = r
             cur = nxt
             if progress:
                 progress(min(1.0, (cur - start) / total))
-            time.sleep(0.3)
         return [res[k] for k in sorted(res) if start <= k <= end]
 
     def latest(self):
@@ -634,7 +714,10 @@ class CandleStore:
             def pg(x, k=k):
                 if progress:
                     progress((k + x) / len(segs))
-            self.insert(fd.range(s, e, progress=pg))
+            if isinstance(fd, YahooFeed):
+                fd.range(s, e, progress=pg, sink=self.insert)
+            else:
+                self.insert(fd.range(s, e, progress=pg))
 
     def _ensure_duka(self, start, end, progress):
         d0 = datetime.fromtimestamp(start / 1000, timezone.utc).date()
